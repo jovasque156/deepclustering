@@ -35,10 +35,12 @@ class DEC(nn.Module):
         weight = (q_**2) / torch.sum(q_, 0)
         return (weight.t()/torch.sum(weight, 1)).t().float()
 
-    def target_distribution_phi(self, phi_):
+    def target_distribution_phi(self, phi_, b_s):
         #add noise to phi
-        phi_hat = phi_**(1/self.beta)
-        weight = phi_hat / torch.sum(phi_, 0)
+        ipdb.set_trace()
+        noise = 1e-5
+        phi_hat = (phi_+noise)**(1/self.beta)
+        weight = phi_hat / torch.sum( b_s, 0)
         return (weight.t()/torch.sum(weight, 1)).t().float()
 
     def forward(self, x):
@@ -47,10 +49,15 @@ class DEC(nn.Module):
 
         # get vector multiplication of soft_assignement and soft_assignment.t()
         # to get the conditional probability of each group
+
+        # ipdb.set_trace()
+
         p_ = self.target_distribution_p(soft_assignment)
         matrix_p = torch.linalg.inv(torch.mm(p_.t(), p_))
-        centroids = torch.mm(matrix_p.t(), torch.mm(p_.t(), x))
+        centroids = torch.mm(matrix_p, torch.mm(p_.t(), x))
         
+        # centroid_assignment = torch.round(p_)
+        # centroids = torch.mm(centroid_assignment, centroids)
         cond_prob_group = self.fairoid_layer(centroids)
 
         return soft_assignment.float(), cond_prob_group.float()

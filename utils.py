@@ -23,6 +23,7 @@ from sklearn.impute import IterativeImputer, SimpleImputer
 
 #Storing estimators
 import pickle
+import os
 
 #Debug
 import ipdb
@@ -206,7 +207,7 @@ def save_checkpoint(state, filename, is_best):
     else:
         print('=> Performance did not improve')
 
-def visualize(data, epoch, x, y, s, dec, num_clusters):
+def visualize(data, epoch, x, y, s, dec, num_clusters, gamma):
     '''
     Visualize the latent space of the model
     Inputs:
@@ -236,13 +237,16 @@ def visualize(data, epoch, x, y, s, dec, num_clusters):
     s = s.cpu().numpy()[:4000]
     
     x_embedded = TSNE(n_components=2, learning_rate='auto', random_state=1).fit_transform(x)
-    plt.scatter(x_embedded[:,0], x_embedded[:,1], c=cluster)
+    plt.scatter(x_embedded[:,0], x_embedded[:,1], c=cluster, s=.5)
 
-    fig.savefig(f'plots/{data}/{data}_{epoch}_cluster.png')
+    if not os.path.exists(f"plots/{data}/clusters{num_clusters}_gamma{gamma}"):
+        os.makedirs(f"plots/{data}/clusters{num_clusters}_gamma{gamma}")
+
+    fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}/ep_{epoch}_cluster.png')
     plt.close(fig)
 
     fig = plt.figure()
     ax = plt.subplot(111)
-    plt.scatter(x_embedded[:,0], x_embedded[:,1], c=s)
-    fig.savefig(f'plots/{data}/{data}_{epoch}_sensitive.png')
+    plt.scatter(x_embedded[:,0], x_embedded[:,1], c=s, s=.5)
+    fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}/ep_{epoch}_sensitive.png')
     plt.close(fig)
