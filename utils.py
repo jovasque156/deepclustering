@@ -32,6 +32,7 @@ import os
 import ipdb
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SELECTED = []
 
 def apply_preprocessing(X, nompipe, numpipe, pipe_normalize, idnumerical = None, idnominal = None):
     '''
@@ -241,11 +242,11 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_si
     s = s.cpu().numpy()
     
     if x_embedded.shape[1]>2:
-        selected = random.sample(range(x.shape[0]), sampled)
-        x_embedded = x_embedded[selected]
-        y = y[selected]
-        s = s[selected]
-        cluster = cluster[selected]
+        # selected = random.sample(range(x.shape[0]), sampled)
+        x_embedded = x_embedded[:sampled]
+        y = y[:sampled]
+        s = s[:sampled]
+        cluster = cluster[:sampled]
         x_embedded = TSNE(n_components=2, learning_rate='auto', random_state=1).fit_transform(x_embedded)
     
         

@@ -30,7 +30,6 @@ FEATURES = {
                     'occupation', 
                     'relationship', 
                     'race', 
-                    'sex', 
                     'capital-gain', 
                     'capital-loss', 
                     'hours-per-week',
@@ -44,7 +43,6 @@ NOMINAL = {
                     'occupation', 
                     'relationship', 
                     'race', 
-                    'sex',
                     'native-country']}
 
 
