@@ -42,17 +42,16 @@ class FairoidLayer(nn.Module):
         else:
             initial_fairoid_centers = fairoid_centers
 
+        # self.fairoid_centers = initial_fairoid_centers
         self.fairoid_centers = nn.Parameter(initial_fairoid_centers)
 
         self.alpha = alpha
 
     def forward(self, cluster_centers):
-        #compute soft assignment q
+        # ipdb.set_trace()
         distance_centers = torch.sum((cluster_centers.unsqueeze(1) - self.fairoid_centers)**2, dim=2)
         numerator_phi = (1.0 + (distance_centers / self.alpha))**(-float(self.alpha+1)/2)
         denominator_phi = torch.sum(numerator_phi, dim=1)
         phi_jt = numerator_phi.t() / denominator_phi
         
         return phi_jt.t().float()
-
-
