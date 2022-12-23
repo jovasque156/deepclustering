@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 import torch
+import random
 
 #Pipelines
 from sklearn.pipeline import Pipeline
@@ -12,6 +13,8 @@ import scipy
 #Plot
 from matplotlib import pyplot as plt
 from sklearn.manifold import TSNE
+import seaborn as sns
+sns.set_theme()
 
 #Transformation
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler, Normalizer
@@ -207,7 +210,7 @@ def save_checkpoint(state, filename, is_best):
     else:
         print('=> Performance did not improve')
 
-def visualize(data, epoch, x, y, s, dec, num_clusters, gamma):
+def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_size_sae):
     '''
     Visualize the latent space of the model
     Inputs:
@@ -224,29 +227,44 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma):
     
     '''
 
-    fig = plt.figure()
-    ax = plt.subplot(111)
+    # fig = plt.figure()
+    # ax = plt.subplot(111)
+    fig, axis = plt.subplots(1, 2)
     dec.to(DEVICE)
     dec.eval()
     
-    q_, phi_ = dec(x.to(DEVICE)) 
-    cluster = q_.argmax(1).detach().cpu().numpy()[:4000]
+    q_, _ = dec(x.to(DEVICE)) 
+    cluster = q_.argmax(1).detach().cpu().numpy()
     x = dec.autoencoder.encode(x.to(DEVICE))
-    x = x.detach().cpu().numpy()[:4000]
-    y = y.cpu().numpy()[:4000]
-    s = s.cpu().numpy()[:4000]
+    x_embedded = x.detach().cpu().numpy()
+    y = y.cpu().numpy()
+    s = s.cpu().numpy()
     
-    x_embedded = TSNE(n_components=2, learning_rate='auto', random_state=1).fit_transform(x)
-    plt.scatter(x_embedded[:,0], x_embedded[:,1], c=cluster, s=.5)
+    if x_embedded.shape[1]>2:
+        selected = random.sample(range(x.shape[0]), sampled)
+        x_embedded = x_embedded[selected]
+        y = y[selected]
+        s = s[selected]
+        cluster = cluster[selected]
+        x_embedded = TSNE(n_components=2, learning_rate='auto', random_state=1).fit_transform(x_embedded)
+    
+        
+    # plt.scatter(x_embedded[:,0], x_embedded[:,1], c=cluster, s=.5)
+    sns.scatterplot(x=x_embedded[:,0], y=x_embedded[:,1], hue=cluster, s=1.2, ax=axis[0], palette=sns.color_palette())
+    sns.scatterplot(x=x_embedded[:,0], y=x_embedded[:,1], hue=s, s=1.2, ax=axis[1], palette=sns.color_palette())
+    
+    axis[0].set_title('cluster')
+    axis[1].set_title('sensitive')
+    
+    if not os.path.exists(f"plots/{data}/clusters{num_clusters}_gamma{gamma}_latent_size_sae{latent_size_sae}"):
+        os.makedirs(f"plots/{data}/clusters{num_clusters}_gamma{gamma}_latent_size_sae{latent_size_sae}")
 
-    if not os.path.exists(f"plots/{data}/clusters{num_clusters}_gamma{gamma}"):
-        os.makedirs(f"plots/{data}/clusters{num_clusters}_gamma{gamma}")
-
-    fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}/ep_{epoch}_cluster.png')
+    fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}_latent_size_sae{latent_size_sae}/ep_{epoch}_cluster.png')
     plt.close(fig)
 
-    fig = plt.figure()
-    ax = plt.subplot(111)
-    plt.scatter(x_embedded[:,0], x_embedded[:,1], c=s, s=.5)
-    fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}/ep_{epoch}_sensitive.png')
-    plt.close(fig)
+    # fig = plt.figure()
+    # ax = plt.subplot(111)
+    # plt.scatter(x_embedded[:,0], x_embedded[:,1], c=s, s=.5)
+    # fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}/ep_{epoch}_sensitive.png')
+    # plt.close(fig)
+    

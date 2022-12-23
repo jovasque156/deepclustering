@@ -42,7 +42,8 @@ class FairoidLayer(nn.Module):
         else:
             initial_fairoid_centers = fairoid_centers
 
-        self.fairoid_centers = initial_fairoid_centers
+        # self.fairoid_centers = initial_fairoid_centers
+        self.fairoid_centers = nn.Parameter(initial_fairoid_centers)
 
         self.alpha = alpha
 

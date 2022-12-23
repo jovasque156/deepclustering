@@ -35,12 +35,16 @@ class DEC(nn.Module):
         weight = (q_**2) / torch.sum(q_, 0)
         return (weight.t()/torch.sum(weight, 1)).t().float()
 
-    def target_distribution_phi(self, phi_, b_s):
+    def target_distribution_phi(self, phi_, target_q, b_s):
         #add noise to phi
-        ipdb.set_trace()
+        # ipdb.set_trace()
+        # b_s = b_s.unsqueeze(1).repeat(1,2)
+        # b_s[:,1] = 1-b_s[:,1]
+        # f_t = torch.mm(target_q.t(), b_s.float())
         noise = 1e-5
         phi_hat = (phi_+noise)**(1/self.beta)
-        weight = phi_hat / torch.sum( b_s, 0)
+        # weight = phi_hat / torch.sum( f_t, 0)
+        weight = phi_hat / torch.sum( phi_, 0).t()
         return (weight.t()/torch.sum(weight, 1)).t().float()
 
     def forward(self, x):
