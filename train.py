@@ -22,6 +22,9 @@ from sklearn.cluster import KMeans
 # Debugging
 import ipdb
 
+#TODO: train by using the new implementation of cluster and dec, these have not been copied to hopper.
+# Run the experiments on hopper.
+
 DATA = ['mnist', 'fashion_mnist', 'cifar10', 'census_income', 'compas']
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -143,7 +146,8 @@ def trainDEC(args):
     assert os.path.isfile(f'resulting_clusterings/{args.data}/best_sae_{args.latent_size_sae}.pt'), 'Pre-training not found. Pre-training SAE by using --pretrain'
 
     print('Loading SAE')
-    best_sae = torch.load(f"resulting_clusterings/{args.data}/best_sae_{args.latent_size_sae}.pt")
+
+    best_sae = torch.load(f"resulting_clusterings/{args.data}/best_sae_{args.latent_size_sae}.pt") if DEVICE=='cuda' else torch.load(f"resulting_clusterings/{args.data}/best_sae_{args.latent_size_sae}.pt", map_location=torch.device('cpu'))
     sae = SAE(input_size= data_train.X.shape[1], 
             dropout=best_sae['args'].dropout, 
             latent_size=best_sae['args'].latent_size_sae, 
@@ -174,12 +178,12 @@ def trainDEC(args):
     #=====Fairoid centers=====
     unique_t, _ = torch.unique(data_train.S, return_counts=True)
     fairoid_centers = torch.zeros(len(unique_t), args.latent_size_sae, dtype=torch.float, requires_grad=False).to(DEVICE)
-    # fairoid_centers = torch.zeros(len(unique_t), args.latent_size_sae, dtype=torch.float, requires_grad=False).to(DEVICE)
+    # fairoid_centers = torch.zeros(len(unique_t), args.latent_size_sae, dtype=torch.float, requires_grad=True).to(DEVICE)
     for t in range(len(unique_t)):
         fairoid_centers[t] = torch.mean(features[sensitives==unique_t[t]], dim=0)
-    fairoid_centers = torch.tensor(fairoid_centers, dtype=torch.float, requires_grad=True).to(DEVICE)
-    fairoid_centers = fairoid_centers.cuda(non_blocking=True)
-    # fairoid_centers = torch.tensor(fairoid_centers, dtype=torch.float, requires_grad=False).to(DEVICE)
+    # fairoid_centers = torch.tensor(fairoid_centers, dtype=torch.float, requires_grad=True).to(DEVICE)
+    # fairoid_centers = fairoid_centers.cuda(non_blocking=True)
+    fairoid_centers = torch.tensor(fairoid_centers, dtype=torch.float, requires_grad=False).to(DEVICE)
     
     # 3.1 Initialize DEC model
     dec = DEC(n_clusters = args.n_clusters, latent_size_sae=args.latent_size_sae, hidden_sizes_sae=args.hidden_sizes_sae, cluster_centers=cluster_centers, fairoid_centers=fairoid_centers, alpha= args.alpha, beta = args.beta, dropout= args.dropout, autoencoder= sae, p_norm=2).to(DEVICE)
@@ -206,15 +210,9 @@ def trainDEC(args):
         loss = 0
         batches = 1
         iterations+=1
-        # features = []
-        # sensitives = []
         # ipdb.set_trace()
         for b_x, b_s, _ in data_train_loader:
             b_x, b_s = b_x.to(DEVICE), b_s.to(DEVICE)
-            
-            # Project batch into the new representation and save the projection
-            # features.append(dec.autoencoder.encode(b_x).detach().cpu())
-            # sensitives.append(b_s)
 
             # Forward pass
             b_x = b_x.cuda(non_blocking=True)
@@ -268,19 +266,6 @@ def trainDEC(args):
         # Save loss if there is improvement
         best = loss/batches if loss/batches<best else best
 
-        #Update fairoids
-#         ipdb.set_trace()
-#         features = torch.cat(features)
-#         sensitives = torch.cat(sensitives)
-#         fairoid_centers = torch.zeros(len(unique_t), args.latent_size_sae, dtype=torch.float, requires_grad=False).to(DEVICE)
-#         for t in range(len(unique_t)):
-#             fairoid_centers[t] = torch.mean(features[sensitives==unique_t[t]], dim=0)
-#         fairoid_centers = torch.tensor(fairoid_centers, dtype=torch.float, requires_grad=False).to(DEVICE)
-# #         fairoid_centers = fairoid_centers.cuda(non_blocking=True)
-# #         with torch.no_grad():
-# #             dec.state_dict()['fairoid_layer.fairoid_centers'].copy_(fairoid_centers)
-#         dec.fairoid_layer.fairoid_centers = fairoid_centers
-
         if iterations>=args.limit_it or abs((loss/batches-prev_loss))/prev_loss<args.tolerance:
             break
         
@@ -305,8 +290,8 @@ if __name__=='__main__':
     parser.add_argument('--limit_it', type=int, default= 50, help='Number of iterations for stopping DEC training')
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of epochs to train the SAE')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size for training the SAE and DEC')
-    parser.add_argument('--lr_pretrain', type=float, default=0.1, help='learning rate for pretraining')
-    parser.add_argument('--lr', type=float, default=0.01, help='learning rate for DEC training')
+    parser.add_argument('--lr_pretrain', type=float, default=0.1, help='learning rate for pretraining SAE')
+    parser.add_argument('--lr', type=float, default=0.01, help='learning rate for training DEC')
     parser.add_argument('--pretrain_sae', action = 'store_true', help = 'Use this flag to pretrain the autoencoder')
     parser.add_argument('--hidden_sizes_sae', type=list, nargs='+', default=[500, 500, 2000], help='List of hidden layer sizes for the autoencoder')
     parser.add_argument('--latent_size_sae', type=int, default=10, help='Latent size for the autoencoder')
