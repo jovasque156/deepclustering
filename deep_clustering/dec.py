@@ -54,7 +54,7 @@ class DEC(nn.Module):
         # get vector multiplication of soft_assignement and soft_assignment.t()
         # to get the conditional probability of each group
 
-        # ipdb.set_trace()
+        ipdb.set_trace()
 
         p_ = self.target_distribution_p(soft_assignment)
         matrix_p = torch.linalg.inv(torch.mm(p_.t(), p_))
@@ -62,6 +62,7 @@ class DEC(nn.Module):
         
         # centroid_assignment = torch.round(p_)
         # centroids = torch.mm(centroid_assignment, centroids)
-        cond_prob_group = self.fairoid_layer(centroids)
+        fairoid_projected = self.autoencoder.encode(self.fairoid_layer.fairoid_centers).detach()
+        cond_prob_group = self.fairoid_layer(centroids, fairoid_projected)
 
         return soft_assignment.float(), cond_prob_group.float()

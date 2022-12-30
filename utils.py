@@ -32,10 +32,11 @@ import os
 import ipdb
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SELECTED = []
 
 def apply_preprocessing(X, nompipe, numpipe, pipe_normalize, idnumerical = None, idnominal = None):
     '''
-    Apply tansformer pipelines to X and returned the transformer dataset.
+    Apply transformer pipelines to X and returned the transformer dataset.
 
     Inputs:
     X: pandas (n,m), representing the dataset with n samples and m features to transform.
@@ -85,20 +86,26 @@ def apply_preprocessing(X, nompipe, numpipe, pipe_normalize, idnumerical = None,
 
 def train_preprocessing(X, idnumerical=None, idnominal=None, imputation=True, encode = 'one-hot', standardscale=True, normalize = True ):
     '''
-    Apply tansformer pipelines to X and returned the transformer dataset.
+    Train transformer pipelines to X and returned the transformer dataset.
 
     Inputs:
     X: pandas (n,m), representing the dataset with n samples and m features to transform.
     idnumerical: numpy, representing the id of numerical features in X to transform using numpipe.
     idnominal: numpy, representing the id of nominal features in X to transform using nompipe.
-    imputation: boolean, representing if missing values are imputed or not.
-    encode: string, representing the type of encoding are applied to nominal features. It
-                    can be one-hot or label.
-    normalize: boolean, representing if numerical variables are normalized. 
+    imputation: boolean, representing if imputation should be applied to X.
+    encode: string, representing the type of encoding to apply to nominal features in X.
+    standardscale: boolean, representing if standardization should be applied to X.
+    normalize: boolean, representing if normalization should be applied to X.
 
     Outputs:
     X_final: csr_matrix, sparse matrix with the transformed X.
+    pipe_nom: pipeline, representing the pipeline with transformer to apply to nominal features in X.
+    pipe_num: pipeline, representing the pipeline with transformer to apply to numerical features in X.
+    pipe_normalize: pipeline, representing the pipeline with transformer to apply to normalize the features in X.
+    numerical: numpy, representing the name of numerical features
+    nominal: numpy, representing the name of nominal features
     '''
+
     #Identifying numerical and nominal variables
     if idnumerical==None:
         idnumerical = [i for i, e in enumerate(X.dtypes) if e == 'float64']
@@ -136,7 +143,7 @@ def train_preprocessing(X, idnumerical=None, idnominal=None, imputation=True, en
         estimators = []
         if imputation == True:
             imp_num = IterativeImputer(max_iter=100, random_state=1)
-            estimators.append(('impuation', imp_num))
+            estimators.append(('imputation', imp_num))
         if standardscale:
             scale = StandardScaler(with_mean=True)
             estimators.append(('standardscale', scale))
@@ -241,11 +248,11 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_si
     s = s.cpu().numpy()
     
     if x_embedded.shape[1]>2:
-        selected = random.sample(range(x.shape[0]), sampled)
-        x_embedded = x_embedded[selected]
-        y = y[selected]
-        s = s[selected]
-        cluster = cluster[selected]
+        # selected = random.sample(range(x.shape[0]), sampled)
+        x_embedded = x_embedded[:sampled]
+        y = y[:sampled]
+        s = s[:sampled]
+        cluster = cluster[:sampled]
         x_embedded = TSNE(n_components=2, learning_rate='auto', random_state=1).fit_transform(x_embedded)
     
         
