@@ -9,6 +9,8 @@ from utils import apply_preprocessing, train_preprocessing
 #Debugging
 import ipdb
 
+#TODO: add the preprocess_datasetes.py from the FUFDP project. There are more datasets.
+
 DIR_DATA = {
     'census_income':'datasets/census_income/'
 }

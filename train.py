@@ -161,7 +161,7 @@ def trainDEC(args):
         b_s = b_s.to(DEVICE)
         features.append(sae.encode(b_x).detach().cpu())
         sensitives.append(b_s.detach().cpu())
-    # ipdb.set_trace()
+    
     features = torch.cat(features)
     sensitives = torch.cat(sensitives)
     
@@ -172,7 +172,6 @@ def trainDEC(args):
     cluster_centers = cluster_centers.cuda(non_blocking=True)
 
     #=====Fairoid centers=====
-    # ipdb.set_trace()
     unique_t, _ = torch.unique(data_train.S, return_counts=True)
     fairoid_centers = torch.zeros(len(unique_t), args.latent_size_sae, dtype=torch.float, requires_grad=False).to(DEVICE)
     # fairoid_centers = torch.zeros(len(unique_t), args.latent_size_sae, dtype=torch.float, requires_grad=False).to(DEVICE)
