@@ -16,7 +16,7 @@ DIR_DATA = {
     'census_income':'datasets/census_income/',
     'compas': 'datasets/compas/',
     'dutch_census': 'datasets/dutch_census/',
-    'german_data': 'datasets/german_credit_data/'
+    'german_data': 'datasets/german_data/'
     }
 
 DIR_DATA_TRAIN = {
@@ -233,6 +233,18 @@ def preprocess_datasets(args):
     
     
 if __name__=='__main__':
+    '''
+    Preprocess the datasets and save them in the datasets/ folder
+
+    Output:
+        - X_train: sparse matrix, representing the features
+        - S_train: numpy, representing the sensitive attribute. Assuming binary
+        - Y_train: numpy, representing the label.
+
+    Example:
+        python preprocess.py --dataset census_income --test_size 0.3 --sensitive_attribute sex
+
+    '''
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='census_income', help='Dataset to preprocess')
     parser.add_argument('--test_size', type=float, default=0.3, help='Size of test if is not defined')

@@ -10,6 +10,9 @@ from scipy.sparse import hstack
 from scipy import sparse
 import scipy
 
+#Datasets
+from datasets.dataset import CustomDataset
+
 #Plot
 from matplotlib import pyplot as plt
 from sklearn.manifold import TSNE
@@ -33,6 +36,48 @@ import ipdb
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 SELECTED = []
+
+def load_data(args, train=True, test=True, merged=True):
+    '''
+    Load data from datasets/ folder
+    Input:
+        args: arguments from argparse
+        train: load train data
+        test: load test data
+    
+    Output:
+        data_train: train data
+        data_test: test data
+    '''
+    #Load data from datasets/ folder
+    checkpoint = torch.load(f"datasets/{args.data}/{args.data}.pt")
+    
+    #Load train data
+    if train:
+        X_train, S_train, Y_train = checkpoint['train']
+        data_train = CustomDataset(X_train, S_train, Y_train)
+
+    #Load test data
+    if test:
+        X_test, S_test, Y_test = checkpoint['test']
+        data_test = CustomDataset(X_test, S_test, Y_test)
+
+    #Merge them in one
+    if merged:
+        X_train, S_train, Y_train = checkpoint['train']
+        X_test, S_test, Y_test = checkpoint['test']
+
+        X = sparse.vstack((X_train, X_test))
+        S = np.concatenate((S_train, S_test))
+        Y = np.concatenate((Y_train, Y_test))
+        data = CustomDataset(X, S, Y)
+
+    output = []
+    if train: output.append(data_train)
+    if test: output.append(data_test)
+    if merged: output.append(data)
+    
+    return tuple(output)
 
 def apply_preprocessing(X, nompipe, numpipe, pipe_normalize, idnumerical = None, idnominal = None):
     '''
@@ -217,9 +262,10 @@ def save_checkpoint(state, filename, is_best):
     else:
         print('=> Performance did not improve')
 
-def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_size_sae):
+def visualize(data, epoch, x, y, s, dec, args):
     '''
     Visualize the latent space of the model
+    
     Inputs:
     data: string, representing the name of the dataset.
     epoch: int, representing the epoch of the model.
@@ -227,7 +273,7 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_si
     y: tensor, representing the labels of the data.
     s: tensor, representing the sensitive attribute of the data.
     dec: object, representing the model to visualize.
-    num_clusters: int, representing the number of clusters of the model.
+    args: argparse, representing the arguments given.
 
     Outputs:
     Plot of the latent space of the model.
@@ -239,7 +285,7 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_si
     fig, axis = plt.subplots(1, 2)
     dec.to(DEVICE)
     dec.eval()
-    
+
     q_, _ = dec(x.to(DEVICE)) 
     cluster = q_.argmax(1).detach().cpu().numpy()
     x = dec.autoencoder.encode(x.to(DEVICE))
@@ -249,10 +295,10 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_si
     
     if x_embedded.shape[1]>2:
         # selected = random.sample(range(x.shape[0]), sampled)
-        x_embedded = x_embedded[:sampled]
-        y = y[:sampled]
-        s = s[:sampled]
-        cluster = cluster[:sampled]
+        x_embedded = x_embedded[:args.sampled]
+        y = y[:args.sampled]
+        s = s[:args.sampled]
+        cluster = cluster[:args.sampled]
         x_embedded = TSNE(n_components=2, learning_rate='auto', random_state=1).fit_transform(x_embedded)
     
         
@@ -263,10 +309,10 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_si
     axis[0].set_title('cluster')
     axis[1].set_title('sensitive')
     
-    if not os.path.exists(f"plots/{data}/clusters{num_clusters}_gamma{gamma}_latent_size_sae{latent_size_sae}"):
-        os.makedirs(f"plots/{data}/clusters{num_clusters}_gamma{gamma}_latent_size_sae{latent_size_sae}")
+    if not os.path.exists(f"plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}"):
+        os.makedirs(f"plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}")
 
-    fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}_latent_size_sae{latent_size_sae}/ep_{epoch}_cluster.png')
+    fig.savefig(f'plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}/ep_{epoch}_cluster.png')
     plt.close(fig)
 
     # fig = plt.figure()
@@ -275,3 +321,29 @@ def visualize(data, epoch, x, y, s, dec, num_clusters, gamma, sampled, latent_si
     # fig.savefig(f'plots/{data}/clusters{num_clusters}_gamma{gamma}/ep_{epoch}_sensitive.png')
     # plt.close(fig)
     
+def balance(S, assignment, n_clusters):
+    '''
+    Compute the balance of the clusters
+    Inputs:
+    S: numpy, representing the sensitive attribute of the data.
+    assignment: numpy, representing the cluster assignment of the data.
+    n_clusters: number of clusters.
+
+    Outputs:
+    balance: float, representing the balance of the clusters.
+    '''
+    # ipdb.set_trace()
+    groups = np.unique(S, return_counts=False)
+
+    balances_clusters = np.ones((n_clusters), dtype=float)
+
+    for c in range(n_clusters):
+        balances = np.ones((len(groups), len(groups)), dtype=float)
+        for i in range(len(groups)):
+            for j in range(len(groups)):
+                if i != j:
+                    balances[i, j] = np.sum(np.logical_and(assignment == c, S == groups[i]))/np.sum(np.logical_and(assignment == c, S == groups[j]))
+
+        balances_clusters[c] = np.min(balances)
+
+    return balances_clusters
