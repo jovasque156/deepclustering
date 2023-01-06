@@ -101,8 +101,8 @@ def ContrastiveLoss(points, sensitive_attribute, m):
 
     # cast the points
     # ipdb.set_trace()
-    positives = torch.cat(positives)
-    negatives = torch.cat(negatives)
+    positives = torch.cat(positives).to(DEVICE)
+    negatives = torch.cat(negatives).to(DEVICE)
 
     # Compute the loss
     relu = torch.nn.ReLU()
@@ -252,39 +252,39 @@ def trainDEC(args):
     #Visualization
     dec.eval()
     visualize(args.data, 0, data_train.X, data_train.Y, data_train.S, dec, args)
-    assignments_prev,_ = dec(data_train.X.to(DEVICE))
+    assignments_prev = dec(data_train.X.to(DEVICE))[0]
     assignments_prev = assignments_prev.detach().argmax(dim=1).cpu().numpy()
 
     print('Training DEC')
     loss_iterations = []
     balance_iterations = []
-    dec.train()
     iterations = 0
     best = float('inf')
     best_balance = 0
     while True:
+        dec.train()
         loss = 0
         batches = 1
         iterations+=1
         # ipdb.set_trace()
         for b_x, b_s, _ in data_train_loader:
+            optimizer.zero_grad()
             b_x, b_s = b_x.to(DEVICE), b_s.to(DEVICE)
 
             # Forward pass
             b_x = b_x.cuda(non_blocking=True) if 'cuda' in DEVICE.type else b_x
-            soft_assignment_q, cond_prob_group_phi = dec(b_x)
+            soft_assignment_q, cond_prob_group_phi, x_proj = dec(b_x)
             target_q = dec.target_distribution_p(soft_assignment_q).detach()
             target_phi = dec.target_distribution_phi(cond_prob_group_phi).detach()
 
             # Compute loss
             fair_loss = FairLoss(cond_prob_group_phi.log(), target_phi)
             cluster_loss = ClusteringLoss(soft_assignment_q.log(), target_q)
-            contrastive_loss_batch = ContrastiveLoss(dec.autoencoder.encode(b_x).detach(), b_s.detach(), 1)
+            contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.margin)
 
             loss_batch = cluster_loss/b_x.shape[0] + args.rho*contrastive_loss_batch + args.gamma*fair_loss 
 
             # Backward pass
-            optimizer.zero_grad()
             loss_batch.backward()
             optimizer.step(closure=None)
             
@@ -293,6 +293,7 @@ def trainDEC(args):
             loss += loss_batch.item()
             batches += 1
         
+        dec.eval()
         loss_iterations.append(loss/batches)
         
         # Save plot every args.plot_iter
@@ -300,14 +301,14 @@ def trainDEC(args):
             print('Plotting results so far')
             visualize(args.data, 
                     iterations, 
-                    data_train.X, 
-                    data_train.Y, 
-                    data_train.S, 
+                    data_train.X.detach(), 
+                    data_train.Y.detach(), 
+                    data_train.S.detach(), 
                     dec,
                     args)
 
         # Compute balance
-        assignments,_ = dec(data_train.X.to(DEVICE))
+        assignments = dec(data_train.X.to(DEVICE))[0]
         assignments = assignments.detach().argmax(dim=1).cpu().numpy()
         b = balance(data_train.S.cpu().numpy(), assignments, args.n_clusters)
         balance_iterations.append(b)

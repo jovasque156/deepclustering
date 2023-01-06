@@ -59,4 +59,4 @@ class DEC(nn.Module):
         # cond_prob_group = self.fairoid_layer(centroids, fairoid_projected)
         cond_prob_group = self.fairoid_layer(centroids)
 
-        return soft_assignment.float(), cond_prob_group.float()
+        return (soft_assignment.float(), cond_prob_group.float(), x_proj)

@@ -2,7 +2,6 @@
 import pandas as pd
 import numpy as np
 import torch
-import random
 
 #Pipelines
 from sklearn.pipeline import Pipeline
@@ -31,7 +30,6 @@ from sklearn.impute import IterativeImputer, SimpleImputer
 import pickle
 import os
 
-#Debug
 import ipdb
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -286,13 +284,13 @@ def visualize(data, epoch, x, y, s, dec, args):
     dec.to(DEVICE)
     dec.eval()
 
-    q_, _ = dec(x.to(DEVICE)) 
+    q_ = dec(x.to(DEVICE))[0]
     cluster = q_.argmax(1).detach().cpu().numpy()
     x = dec.autoencoder.encode(x.to(DEVICE))
     x_embedded = x.detach().cpu().numpy()
     y = y.cpu().numpy()
     s = s.cpu().numpy()
-    
+
     if x_embedded.shape[1]>2:
         # selected = random.sample(range(x.shape[0]), sampled)
         x_embedded = x_embedded[:args.sampled]
@@ -309,10 +307,10 @@ def visualize(data, epoch, x, y, s, dec, args):
     axis[0].set_title('cluster')
     axis[1].set_title('sensitive')
     
-    if not os.path.exists(f"plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}"):
-        os.makedirs(f"plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}")
+    if not os.path.exists(f"plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_rho{args.rho}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}"):
+        os.makedirs(f"plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_rho{args.rho}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}")
 
-    fig.savefig(f'plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}/ep_{epoch}_cluster.png')
+    fig.savefig(f'plots/{data}/clusters{args.n_clusters}_gamma{args.gamma}_rho{args.rho}_beta{args.beta}_latentsize{args.latent_size_sae}_runid{args.run_id}/ep_{epoch}_cluster.png')
     plt.close(fig)
 
     # fig = plt.figure()
