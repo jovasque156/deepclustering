@@ -347,3 +347,23 @@ def balance(S, assignment, n_clusters):
         balances_clusters[c] = np.min(balances)
 
     return balances_clusters
+
+def similarity_matrix(points):
+    '''
+    Compute similarity matrix using matrix
+
+    Inputs:
+    points: tensor, representing the data points.
+
+    Outputs:
+    sim_matrix: tensor, representing the similarity matrix.
+    '''
+
+    # ipdb.set_trace()
+    matrix = torch.mm(points, points.t())
+    diag = matrix.diag().unsqueeze(0)
+    diag = diag.expand_as(matrix)
+
+    sim = diag + diag.t() - 2*matrix
+
+    return sim.sqrt()
