@@ -280,6 +280,8 @@ def visualize(data, epoch, x, y, s, dec, args):
 
     # fig = plt.figure()
     # ax = plt.subplot(111)
+    dec.eval()
+
     fig, axis = plt.subplots(1, 2)
     dec.to(DEVICE)
     dec.eval()

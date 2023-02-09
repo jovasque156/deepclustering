@@ -278,7 +278,7 @@ def trainDEC(args):
             target_phi = dec.target_distribution_phi(cond_prob_group_phi).detach()
 
             # Compute loss
-            fair_loss = FairLoss(cond_prob_group_phi.log(), target_phi)
+            # fair_loss = FairLoss(cond_prob_group_phi.log(), target_phi)
             cluster_loss = ClusteringLoss(soft_assignment_q.log(), target_q)
             contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.margin)
 
@@ -286,14 +286,13 @@ def trainDEC(args):
 
             # Backward pass
             loss_batch.backward()
-            optimizer.step(closure=None)
+            optimizer.step()
             
 #           ipdb.set_trace()
 
             loss += loss_batch.item()
             batches += 1
-        
-        dec.eval()
+
         loss_iterations.append(loss/batches)
         
         # Save plot every args.plot_iter
@@ -308,6 +307,7 @@ def trainDEC(args):
                     args)
 
         # Compute balance
+        dec.eval()
         assignments = dec(data_train.X.to(DEVICE))[0]
         assignments = assignments.detach().argmax(dim=1).cpu().numpy()
         b = balance(data_train.S.cpu().numpy(), assignments, args.n_clusters)
