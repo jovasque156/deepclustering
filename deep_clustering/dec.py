@@ -46,7 +46,7 @@ class DEC(nn.Module):
     def forward(self, x):
         # ipdb.set_trace()
         x_proj = self.autoencoder.encode(x)
-        soft_assignment = self.clustering_layer(x_proj.detach())
+        soft_assignment = self.clustering_layer(x_proj)
 
         # get vector multiplication of soft_assignement and soft_assignment.t()
         # to get the conditional probability of each group

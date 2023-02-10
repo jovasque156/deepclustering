@@ -18,6 +18,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam, SGD
 from torch.nn import MSELoss, KLDivLoss
+import torch.nn.functional as F
 
 # resulting_clusterings
 from deep_clustering.sae import SAE
@@ -46,15 +47,30 @@ def ContrastiveLoss(points, sensitive_attribute, t):
     # Compute the similarity matrix
     
     # ipdb.set_trace()
+
+    # sensitive_attribute = sensitive_attribute.contiguous().view(-1, 1)
+    # mask = torch.eq(sensitive_attribute, sensitive_attribute.T).float().to(DEVICE)
     
-    loss = torch.zeros(points.shape[0])
+    loss = torch.zeros(points.shape[0]).to(DEVICE)
 
     for i, (p, s) in enumerate(zip(points, sensitive_attribute)):
-        positives = points[sensitive_attribute==s]
-        phi_p = torch.exp(torch.sum(p*positives, dim=-1))
-        phi_p /= phi_p.sum()
-        phi_p = torch.log(phi_p).sum()
-        loss[i] += -phi_p/phi_p.shape[0]
+        positives = points[sensitive_attribute!=s]
+        anchor_dot_contrast = p*positives/t
+        logit_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logit_max.detach()
+        
+        # phi_p = torch.exp(torch.sum(logits, dim=-1))
+        # phi_p /= phi_p.sum()
+        # phi_p = torch.log(phi_p).sum()
+        
+        exp_logits_fair = torch.exp(logits)
+        exp_logits_sum = exp_logits_fair.sum(1, keepdim=True)
+        log_prob = logits - torch.log(exp_logits_sum+((exp_logits_sum==0)*1))
+        
+        
+        mean_log_prob = log_prob.sum(1)/positives.shape[0]
+        
+        loss[i] = -mean_log_prob.mean()
 
     return loss.mean()
 
@@ -264,16 +280,25 @@ def trainDEC(args):
     fairoid_centers = fairoid_centers.cuda(non_blocking=True) if 'cuda' in DEVICE.type else fairoid_centers
     
     # 3.1 Initialize DEC model
-    dec = DEC(n_clusters = args.n_clusters, latent_size_sae=args.latent_size_sae, hidden_sizes_sae=args.hidden_sizes_sae, cluster_centers=cluster_centers, fairoid_centers=fairoid_centers, alpha= args.alpha, beta = args.beta, dropout= args.dropout, autoencoder= sae, p_norm=2).to(DEVICE)
+    dec = DEC(n_clusters = args.n_clusters,
+                latent_size_sae=args.latent_size_sae, 
+                hidden_sizes_sae=args.hidden_sizes_sae, 
+                cluster_centers=cluster_centers, 
+                fairoid_centers=fairoid_centers, 
+                alpha= args.alpha, 
+                beta = args.beta, 
+                dropout= args.dropout, 
+                autoencoder= sae, 
+                p_norm=2).to(DEVICE)
     
     # 3.2 Initialize optimizer
-    # optimizer = SGD(dec.parameters(), lr=args.lr, momentum=0.9)
-    optimizer = Adam(dec.parameters(), lr=args.lr, weight_decay=1e-5)
+    # optimizer = SGD(dec.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
+    optimizer = Adam(dec.parameters(), lr=args.lr, weight_decay=1e-4)
     
     # 4. Initialize cluster centroids
-    with torch.no_grad():
-        dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
-        dec.state_dict()['fairoid_layer.fairoid_centers'].copy_(fairoid_centers)
+    # with torch.no_grad():
+    #     dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
+    #     dec.state_dict()['fairoid_layer.fairoid_centers'].copy_(fairoid_centers)
     # dec.fairoid_layer.fairoid_centers = fairoid_centers
     
     # Initial assignments
@@ -289,6 +314,9 @@ def trainDEC(args):
     iterations = 0
     best = float('inf')
     best_balance = 0
+
+    criterion = F.kl_div
+    criterionFair = F.kl_div
     while True:
         dec.train()
         loss = 0
@@ -296,25 +324,33 @@ def trainDEC(args):
         iterations+=1
         # ipdb.set_trace()
         for b_x, b_s, _ in data_train_loader:
-            optimizer.zero_grad()
+            
             b_x, b_s = b_x.to(DEVICE), b_s.to(DEVICE)
 
             # Forward pass
             b_x = b_x.cuda(non_blocking=True) if 'cuda' in DEVICE.type else b_x
+            b_s = b_s.cuda(non_blocking=True) if 'cuda' in DEVICE.type else b_s
             soft_assignment_q, cond_prob_group_phi, x_proj = dec(b_x)
+            # soft_assignment_q, _, x_proj = dec(b_x)
             target_q = dec.target_distribution_p(soft_assignment_q).detach()
-            # target_phi = dec.target_distribution_phi(cond_prob_group_phi).detach()
+            target_phi = dec.target_distribution_phi(cond_prob_group_phi).detach()
 
             # Compute loss
-            # fair_loss = FairLoss(cond_prob_group_phi.log(), target_phi)
-            cluster_loss = ClusteringLoss(soft_assignment_q.log(), target_q)
+            fair_loss = criterionFair(cond_prob_group_phi.log(), target_phi, reduction='batchmean')
+            # cluster_loss = ClusteringLoss(soft_assignment_q.log(), target_q)
+            cluster_loss = criterion(soft_assignment_q.log(), target_q, reduction='batchmean')
             # contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.margin)
-            contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.temp)
-
+            # contrastive_loss_batch = ContrastiveLoss(x_proj.clone().detach(), b_s.detach(), args.temp)
+            
+            
+            # ipdb.set_trace()
             # loss_batch = cluster_loss/b_x.shape[0] + args.rho*contrastive_loss_batch + args.gamma*fair_loss 
-            loss_batch = cluster_loss/b_x.shape[0] + args.rho*contrastive_loss_batch
+            # loss_batch = cluster_loss + args.rho*contrastive_loss_batch
+            # loss_batch = cluster_loss
+            loss_batch = cluster_loss + args.gamma*fair_loss
 
             # Backward pass
+            optimizer.zero_grad()
             loss_batch.backward()
             optimizer.step()
             
