@@ -249,7 +249,7 @@ if __name__=='__main__':
     parser.add_argument('--dataset', type=str, default='census_income', help='Dataset to preprocess')
     parser.add_argument('--test_size', type=float, default=0.3, help='Size of test if is not defined')
     parser.add_argument('--sensitive_attribute', type=str, default='sex', help='features used as sensitive attribute')
-    parser.add_argument('--target_variable', type=str, default='target', help='target variable')
+    parser.add_argument('--target_variable', type=str, default='income', help='target variable')
     parser.add_argument('--nominal_encode', type=str, default='label', help='Type of encoding for nominal features')
     parser.add_argument('--standardscale', action="store_true", help='Apply standard scale transformation')
     parser.add_argument('--normalize', action="store_true", help='Apply normalization transformation')

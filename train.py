@@ -31,6 +31,33 @@ DATA = ['census_income', 'compas', 'dutch_census', 'german_data']
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def ContrastiveLoss(points, sensitive_attribute, t):
+    '''
+    Compute the contrastive loss
+
+    Input:
+        points: points to compute the loss on
+        sensitive_attribute: sensitive attribute of the points
+        m: margin
+
+    Output:
+        loss_c: contrastive loss
+    '''
+    # Compute the similarity matrix
+    
+    # ipdb.set_trace()
+    
+    loss = torch.zeros(points.shape[0])
+
+    for i, (p, s) in enumerate(zip(points, sensitive_attribute)):
+        positives = points[sensitive_attribute==s]
+        phi_p = torch.exp(torch.sum(p*positives, dim=-1))
+        phi_p /= phi_p.sum()
+        phi_p = torch.log(phi_p).sum()
+        loss[i] += -phi_p/phi_p.shape[0]
+
+    return loss.mean()
+
 def ClusteringLoss(q_, target_q):
     '''
     Compute the clustering loss function
@@ -64,51 +91,51 @@ def FairLoss(phi, target_phi):
 
     return loss_fr
 
-def ContrastiveLoss(points, sensitive_attribute, m):
-    '''
-    Compute the contrastive loss
+# def ContrastiveLoss(points, sensitive_attribute, m):
+#     '''
+#     Compute the contrastive loss
 
-    Input:
-        points: points to compute the loss on
-        sensitive_attribute: sensitive attribute of the points
-        m: margin
+#     Input:
+#         points: points to compute the loss on
+#         sensitive_attribute: sensitive attribute of the points
+#         m: margin
 
-    Output:
-        loss_c: contrastive loss
-    '''
-    # Compute the similarity matrix
-    sim = similarity_matrix(points)
+#     Output:
+#         loss_c: contrastive loss
+#     '''
+#     # Compute the similarity matrix
+#     sim = similarity_matrix(points)
 
-    # Construct the 3-tuple with positive and negative points
-    positives = []
-    negatives = []
+#     # Construct the 3-tuple with positive and negative points
+#     positives = []
+#     negatives = []
 
-    for i in range(sim.shape[0]):
-        distances = sim[i,:]
+#     for i in range(sim.shape[0]):
+#         distances = sim[i,:]
 
-        #Positive candidates
-        positive_candidates = 1e10*((sensitive_attribute==sensitive_attribute[i]) + (distances<=m))
-        # Negative candidates
-        negative_candidates = -1e10*((sensitive_attribute!=sensitive_attribute[i]) + (distances>m))
-        negative_candidates[i] = -1e10
+#         #Positive candidates
+#         positive_candidates = 1e10*((sensitive_attribute==sensitive_attribute[i]) + (distances<=m))
+#         # Negative candidates
+#         negative_candidates = -1e10*((sensitive_attribute!=sensitive_attribute[i]) + (distances>m))
+#         negative_candidates[i] = -1e10
         
-        # Select the positive and negative points
-        positive = torch.argmin(distances+positive_candidates) if sum(positive_candidates==0) > 0 else 0
-        negative = torch.argmax(distances+negative_candidates) if sum(negative_candidates==0) > 0 else 0
+#         # Select the positive and negative points
+#         positive = torch.argmin(distances+positive_candidates) if sum(positive_candidates==0) > 0 else 0
+#         negative = torch.argmax(distances+negative_candidates) if sum(negative_candidates==0) > 0 else 0
 
-        positives.append(points[positive,:].detach().cpu())
-        negatives.append(points[negative,:].detach().cpu())
+#         positives.append(points[positive,:].detach().cpu())
+#         negatives.append(points[negative,:].detach().cpu())
 
-    # cast the points
-    # ipdb.set_trace()
-    positives = torch.cat(positives).to(DEVICE)
-    negatives = torch.cat(negatives).to(DEVICE)
+#     # cast the points
+#     # ipdb.set_trace()
+#     positives = torch.cat(positives).to(DEVICE)
+#     negatives = torch.cat(negatives).to(DEVICE)
 
-    # Compute the loss
-    relu = torch.nn.ReLU()
-    loss_c = torch.mean(relu(torch.sum((positives.reshape(sim.shape[0],-1)-points)**2,dim=1).sqrt() - torch.sum((negatives.reshape(sim.shape[0],-1)-points)**2,dim=1).sqrt()))
+#     # Compute the loss
+#     relu = torch.nn.ReLU()
+#     loss_c = torch.mean(relu(torch.sum((positives.reshape(sim.shape[0],-1)-points)**2,dim=1).sqrt() - torch.sum((negatives.reshape(sim.shape[0],-1)-points)**2,dim=1).sqrt()))
     
-    return loss_c
+#     return loss_c
 
 def pretrainSAE(args):
     '''
@@ -158,13 +185,14 @@ def pretrainSAE(args):
         
         loss_epochs.append(loss/batches)
         # Save sae if there is an improvement
-        save_checkpoint({'epoch': epoch,
-                        'state_dict': sae.state_dict(),
-                        'optimizer': optimizer.state_dict(), 
-                        'loss': loss_epochs, 
-                        'args': args}, 
-                        f"resulting_clusterings/{args.data}/best_sae_{args.latent_size_sae}.pt", 
-                        loss/batches<best)
+        if args.save_checkpoints:
+            save_checkpoint({'epoch': epoch,
+                            'state_dict': sae.state_dict(),
+                            'optimizer': optimizer.state_dict(), 
+                            'loss': loss_epochs, 
+                            'args': args}, 
+                            f"resulting_clusterings/{args.data}/best_sae_{args.latent_size_sae}.pt", 
+                            loss/batches<best)
 
         best = loss/batches if loss/batches<best else best
 
@@ -275,14 +303,16 @@ def trainDEC(args):
             b_x = b_x.cuda(non_blocking=True) if 'cuda' in DEVICE.type else b_x
             soft_assignment_q, cond_prob_group_phi, x_proj = dec(b_x)
             target_q = dec.target_distribution_p(soft_assignment_q).detach()
-            target_phi = dec.target_distribution_phi(cond_prob_group_phi).detach()
+            # target_phi = dec.target_distribution_phi(cond_prob_group_phi).detach()
 
             # Compute loss
             # fair_loss = FairLoss(cond_prob_group_phi.log(), target_phi)
             cluster_loss = ClusteringLoss(soft_assignment_q.log(), target_q)
-            contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.margin)
+            # contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.margin)
+            contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.temp)
 
-            loss_batch = cluster_loss/b_x.shape[0] + args.rho*contrastive_loss_batch + args.gamma*fair_loss 
+            # loss_batch = cluster_loss/b_x.shape[0] + args.rho*contrastive_loss_batch + args.gamma*fair_loss 
+            loss_batch = cluster_loss/b_x.shape[0] + args.rho*contrastive_loss_batch
 
             # Backward pass
             loss_batch.backward()
@@ -296,7 +326,7 @@ def trainDEC(args):
         loss_iterations.append(loss/batches)
         
         # Save plot every args.plot_iter
-        if iterations%args.plot_iter==0:
+        if iterations%args.plot_iter==0 and args.plot:
             print('Plotting results so far')
             visualize(args.data, 
                     iterations, 
@@ -317,23 +347,25 @@ def trainDEC(args):
         print(f"Iteration: {iterations}, Loss: {loss/batches: .4f}, Balances: {b}")
 
         # Save dec if there is an improvement
-        save_checkpoint({'iterations': iterations,
-                        'state_dict': dec.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'loss_iterations': loss_iterations,
-                        'balance_iterations': balance_iterations,
-                        'args': args}, 
-                        f"resulting_clusterings/{args.data}/best_balance_dec_nclusters{args.n_clusters}_g{args.gamma}_rho{args.rho}_run{args.run_id}.pt", 
-                        b.min()>best_balance)
+        if args.save_checkpoints:
+            save_checkpoint({'iterations': iterations,
+                            'state_dict': dec.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'loss_iterations': loss_iterations,
+                            'balance_iterations': balance_iterations,
+                            'args': args}, 
+                            f"resulting_clusterings/{args.data}/best_balance_dec_nclusters{args.n_clusters}_g{args.gamma}_rho{args.rho}_run{args.run_id}.pt", 
+                            b.min()>best_balance)
         
-        save_checkpoint({'iterations': iterations,
-                        'state_dict': dec.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'loss_iterations': loss_iterations,
-                        'balance_iterations': balance_iterations,
-                        'args': args}, 
-                        f"resulting_clusterings/{args.data}/best_loss_dec_nclusters{args.n_clusters}_g{args.gamma}_rho{args.rho}_run{args.run_id}.pt", 
-                        best>loss/batches)
+        if args.save_checkpoints:
+            save_checkpoint({'iterations': iterations,
+                            'state_dict': dec.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'loss_iterations': loss_iterations,
+                            'balance_iterations': balance_iterations,
+                            'args': args}, 
+                            f"resulting_clusterings/{args.data}/best_loss_dec_nclusters{args.n_clusters}_g{args.gamma}_rho{args.rho}_run{args.run_id}.pt", 
+                            best>loss/batches)
 
         # Save loss if there is improvement
         best = loss/batches if loss/batches<best else best
@@ -347,14 +379,15 @@ def trainDEC(args):
         
         assignments_prev = assignments
 
-    save_checkpoint({'iterations': iterations,
-                    'state_dict': dec.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'loss_iterations': loss_iterations,
-                    'balance_iterations': balance_iterations,
-                    'args': args}, 
-                    f"resulting_clusterings/{args.data}/last_dec_nclusters{args.n_clusters}_g{args.gamma}_rho{args.rho}_run{args.run_id}.pt", 
-                    True)
+    if args.save_checkpoints:
+        save_checkpoint({'iterations': iterations,
+                        'state_dict': dec.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'loss_iterations': loss_iterations,
+                        'balance_iterations': balance_iterations,
+                        'args': args}, 
+                        f"resulting_clusterings/{args.data}/last_dec_nclusters{args.n_clusters}_g{args.gamma}_rho{args.rho}_run{args.run_id}.pt", 
+                        True)
 
 
 if __name__=='__main__':
@@ -364,11 +397,12 @@ if __name__=='__main__':
     parser.add_argument('--data', type=str, default='census_income')
     parser.add_argument('--sampled', type=int, default=4000, help='number of sampling for plots')
     parser.add_argument('--n_clusters', type=int, default=10)
-    parser.add_argument('--alpha', type=float, default=1.0)
-    parser.add_argument('--beta', type=float, default=1000.0)
+    parser.add_argument('--alpha', type=float, default=1.0, help='Parameter of q distribution, which is the assignment function')
+    parser.add_argument('--beta', type=float, default=1000.0, help = 'Parameter for phi distribution, which is the conditional distribution of sensitive attribute given the centroid')
     parser.add_argument('--gamma', type=float, default=1.0, help='Weight for fairness loss')
     parser.add_argument('--rho', type=float, default=10.0, help='Weight for Contrastive loss')
-    parser.add_argument('--margin', type=float, default=1.0)
+    parser.add_argument('--margin', type=float, default=1.0, help='Parameter to define positive and negative in contrastive loss')
+    parser.add_argument('--temp', type=float, default=1.0, help='Temperature parameter')
     parser.add_argument('--dropout', type=float, default=0.2)
     parser.add_argument('--p_norm', type=int, default=2)
     parser.add_argument('--plot_iter', type=int, default=1, help='Number of iterations to pass to plot result so far')
@@ -381,6 +415,8 @@ if __name__=='__main__':
     parser.add_argument('--pretrain_sae', action = 'store_true', help = 'Use this flag to pretrain the autoencoder')
     parser.add_argument('--hidden_sizes_sae', type=list, nargs='+', default=[500, 500, 2000], help='List of hidden layer sizes for the autoencoder')
     parser.add_argument('--latent_size_sae', type=int, default=5, help='Latent size for the autoencoder')
+    parser.add_argument('--save_checkpoints', action='store_true', help='Set to store checkpoints')
+    parser.add_argument('--plot', action='store_true', help='Set to plot across iterations')
     
     args = parser.parse_args()
     print('=====================')    
