@@ -292,8 +292,8 @@ def trainDEC(args):
                 p_norm=2).to(DEVICE)
     
     # 3.2 Initialize optimizer
-    # optimizer = SGD(dec.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
-    optimizer = Adam(dec.parameters(), lr=args.lr, weight_decay=1e-4)
+    optimizer = SGD(dec.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
+    # optimizer = Adam(dec.parameters(), lr=args.lr, weight_decay=1e-4)
     
     # 4. Initialize cluster centroids
     # with torch.no_grad():
@@ -304,8 +304,8 @@ def trainDEC(args):
     # Initial assignments
     #Visualization
     dec.eval()
-    visualize(args.data, 0, data_train.X, data_train.Y, data_train.S, dec, args)
-    assignments_prev = dec(data_train.X.to(DEVICE))[0]
+    if args.plot: visualize(args.data, 0, data_train.X, data_train.Y, data_train.S, dec, args)
+    assignments_prev = dec.soft_assignment(dec.project(data_train.X.to(DEVICE)))
     assignments_prev = assignments_prev.detach().argmax(dim=1).cpu().numpy()
 
     print('Training DEC')
@@ -320,7 +320,7 @@ def trainDEC(args):
     while True:
         dec.train()
         loss = 0
-        batches = 1
+        # batches = 1
         iterations+=1
         # ipdb.set_trace()
         for b_x, b_s, _ in data_train_loader:
@@ -330,15 +330,19 @@ def trainDEC(args):
             # Forward pass
             b_x = b_x.cuda(non_blocking=True) if 'cuda' in DEVICE.type else b_x
             b_s = b_s.cuda(non_blocking=True) if 'cuda' in DEVICE.type else b_s
-            soft_assignment_q, cond_prob_group_phi, x_proj = dec(b_x)
+            x_proj = dec.project(b_x)
+            q = dec.soft_assignment(x_proj)
+            phi = dec.cond_prob(q, x_proj)
+
             # soft_assignment_q, _, x_proj = dec(b_x)
-            target_q = dec.target_distribution_p(soft_assignment_q).detach()
-            target_phi = dec.target_distribution_phi(cond_prob_group_phi).detach()
+            target_q = dec.target_distribution_p(q).detach()
+            target_phi = dec.target_distribution_phi(phi).detach()
 
             # Compute loss
-            fair_loss = criterionFair(cond_prob_group_phi.log(), target_phi, reduction='batchmean')
+            # ipdb.set_trace()
+            fair_loss = criterionFair(phi.log(), target_phi, reduction='sum')
             # cluster_loss = ClusteringLoss(soft_assignment_q.log(), target_q)
-            cluster_loss = criterion(soft_assignment_q.log(), target_q, reduction='batchmean')
+            cluster_loss = criterion(q.log(), target_q, reduction='batchmean')
             # contrastive_loss_batch = ContrastiveLoss(x_proj.detach(), b_s.detach(), args.margin)
             # contrastive_loss_batch = ContrastiveLoss(x_proj.clone().detach(), b_s.detach(), args.temp)
             
@@ -356,11 +360,9 @@ def trainDEC(args):
             
 #           ipdb.set_trace()
 
-            loss += loss_batch.item()
-            batches += 1
+            # loss += loss_batch.item()
+            # batches += 1
 
-        loss_iterations.append(loss/batches)
-        
         # Save plot every args.plot_iter
         if iterations%args.plot_iter==0 and args.plot:
             print('Plotting results so far')
@@ -374,13 +376,26 @@ def trainDEC(args):
 
         # Compute balance
         dec.eval()
-        assignments = dec(data_train.X.to(DEVICE))[0]
-        assignments = assignments.detach().argmax(dim=1).cpu().numpy()
-        b = balance(data_train.S.cpu().numpy(), assignments, args.n_clusters)
-        balance_iterations.append(b)
+        x_proj_iter = dec.project(data_train.X.to(DEVICE))
+        q_iter = dec.soft_assignment(x_proj_iter)
+        target_q_iter = dec.target_distribution_p(q_iter).detach()
+        
+        phi_iter = dec.cond_prob(q_iter, x_proj_iter)
+        target_phi_iter = dec.target_distribution_phi(phi_iter).detach()
 
+
+        fair_loss = criterionFair(phi_iter.log(), target_phi_iter, reduction='sum')
+        cluster_loss = criterion(q_iter.log(), target_q_iter, reduction='batchmean')
+        loss_iter = cluster_loss + args.gamma*fair_loss
+        loss_iterations.append(loss_iter)
+        
+        assignment_iter = q_iter.detach().argmax(dim=1).cpu().numpy()
+        b = balance(data_train.S.cpu().numpy(), assignment_iter, args.n_clusters)
+        balance_iterations.append(b)
         # Print loss
-        print(f"Iteration: {iterations}, Loss: {loss/batches: .4f}, Balances: {b}")
+        # print(f'centroids: {dec.clustering_layer.cluster_centers}')
+        # print(f'fairoids: {dec.fairoid_layer.fairoid_centers}')
+        print(f"Iteration: {iterations}, Loss: {loss_iter: .4f}, Balances: {b}")
 
         # Save dec if there is an improvement
         if args.save_checkpoints:
@@ -401,19 +416,19 @@ def trainDEC(args):
                             'balance_iterations': balance_iterations,
                             'args': args}, 
                             f"resulting_clusterings/{args.data}/best_loss_dec_nclusters{args.n_clusters}_g{args.gamma}_rho{args.rho}_run{args.run_id}.pt", 
-                            best>loss/batches)
+                            best>loss_iter)
 
         # Save loss if there is improvement
-        best = loss/batches if loss/batches<best else best
+        best = loss_iter if loss_iter<best else best
         best_balance = b.min() if b.min()>best_balance else best_balance
 
         # Stop if iterations are greater than the limit or the loss is less than the tolerance
-        total_dif = np.count_nonzero(assignments-assignments_prev)
-        print(f'Changes: {total_dif/assignments.shape[0]: .2%}')
-        if total_dif/assignments.shape[0]<=args.tolerance or args.limit_it<=iterations:
+        total_dif = np.count_nonzero(assignment_iter-assignments_prev)
+        print(f'Changes: {total_dif/assignment_iter.shape[0]: .2%}')
+        if total_dif/assignment_iter.shape[0]<=args.tolerance or args.limit_it<=iterations:
             break
         
-        assignments_prev = assignments
+        assignments_prev = assignment_iter
 
     if args.save_checkpoints:
         save_checkpoint({'iterations': iterations,
