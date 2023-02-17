@@ -53,7 +53,7 @@ class SAE(nn.Module):
         self.decoder.apply(func)
 
 
-    def get_encoder(self,x):
+    def get_encoder(self):
         return self.encoder
 
     def forward(self, x):
@@ -82,22 +82,8 @@ class clustering(nn.Module):
         self.cluster_centers = nn.Parameter(initial_cluster_centers)
 
     def forward(self, inputs):
-        '''
-        Forward pass
-
-        Parameters
-        ----------
-        inputs : torch.Tensor
-            Input tensor
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor
-        '''
-        # q = 1.0 / (1.0 + (torch.sum((inputs[:, None, :] - self.clustcenters[None, :, :]) ** 2, dim=2) / self.alpha))
         q = 1.0 / (1.0 + (torch.sum(torch.square(torch.unsqueeze(inputs, axis=1) - self.cluster_centers), axis=2) / self.alpha))
-        q **= (self.alpha + 1.0) / 2.0
+        q = q**((self.alpha + 1.0) / 2.0)
         q = torch.transpose(torch.transpose(q, 0, 1) / torch.sum(q, axis=1), 0, 1)
         return q
     
@@ -105,6 +91,45 @@ class clustering(nn.Module):
     def target_distribution(q):
         weight = q ** 2 / q.sum(0)
         return (weight.t() / weight.sum(1)).t()
+
+class fair_clustering(nn.Module):
+    def __init__(self, 
+                n_clusters:int,
+                latent_size:int, 
+                alpha:float,
+                fairoid_centers: Optional[torch.Tensor]=None, 
+                p_norm=2):
+        super(fair_clustering, self).__init__()
+        self.n_clusters = n_clusters
+        self.latent_size = latent_size
+        self.p_norm = p_norm
+        
+        if fairoid_centers==None:
+            initial_fairoid_centers = torch.zeros(self.n_clusters, self.latent_size, dtype=torch.float64).cuda()
+            nn.init.xavier_uniform_(initial_fairoid_centers)
+        else:
+            initial_fairoid_centers = fairoid_centers
+
+        self.fairoid_centers = nn.Parameter(initial_fairoid_centers)
+
+        self.alpha = alpha
+
+    def forward(self, cluster_centers):
+        # ipdb.set_trace()
+        # distance_centers = torch.sum((cluster_centers.unsqueeze(1) - fairoid_centers)**2, dim=2)
+        distance_centers = torch.sum((cluster_centers.unsqueeze(1) - self.fairoid_centers)**2, dim=2)
+        numerator_phi = (1.0 + (distance_centers / self.alpha))**(-float(self.alpha+1)/2)
+        denominator_phi = torch.sum(numerator_phi, dim=1)
+        phi_jt = numerator_phi.t() / denominator_phi
+        return phi_jt.t().float()
+    
+    @staticmethod
+    def target_distribution_phi(self, phi):
+        # ipdb.set_trace()
+        noise = 1e-5
+        phi_hat = (phi+noise)**(1/self.beta)
+        weight = phi_hat / torch.sum( phi, 0).t()
+        return (weight.t()/torch.sum(weight, 1)).t().float()    
 
 class DEC(nn.Module):
     def __init__(self, 
@@ -124,7 +149,7 @@ class DEC(nn.Module):
 
         # self.clustering_layer = ClusterLayer(n_clusters, latent_size_sae, cluster_centers, alpha, p_norm)
         self.clustering_layer = clustering(n_clusters, latent_size_sae)
-        # self.fairoid_layer = FairoidLayer(n_clusters, latent_size_sae, fairoid_centers, alpha, p_norm)
+        self.fairoid_layer = FairoidLayer(n_clusters, latent_size_sae, fairoid_centers, alpha, p_norm)
         
         self.__null_autoencoder = autoencoder==None
         if self.__null_autoencoder:
@@ -165,7 +190,16 @@ class DEC(nn.Module):
 
     #     return cond_prob_group
 
+    def cond_prob(self, p, x_proj):
+        matrix_p = torch.linalg.inv(torch.mm(p.t(), p))
+        centroids = torch.mm(matrix_p, torch.mm(p.t(), x_proj))
+
+        phi = self.fairoid_layer(centroids)
+
+        return phi
     def forward(self, x):
-        X = self.model(x)
-        return X
+        x_proj = self.autoencoder.encoder(x)
+        q = self.clustering_layer(x_proj)
+        # X = self.model(x)
+        return q
 
