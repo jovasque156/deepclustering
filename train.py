@@ -178,8 +178,8 @@ def pretrainSAE(data_path:str,
     # Pretrain the autoencoder
     # sae = SAE(input_size= data.X.shape[1], dropout=args.dropout, latent_size=args.latent_size_sae, hidden_sizes=args.hidden_sizes_sae).to(DEVICE)
     
-    # optimizer = SGD(sae.parameters(), lr=args.lr_pretrain, momentum=0.9)
-    optimizer = Adam(model.autoencoder.parameters(), lr=1e-3, weight_decay=1e-3)
+    optimizer = SGD(model.autoencoder.parameters(), lr=.1, momentum=0.9)
+    # optimizer = Adam(model.autoencoder.parameters(), lr=1e-4, weight_decay=1e-3)
 
     criterion = MSELoss()
 
@@ -223,8 +223,6 @@ def pretrainSAE(data_path:str,
         loss_epochs.append(loss/batches)
         # Save sae if there is an improvement
         # if args.save_checkpoints:
-        if not os.path.exists(savepath):
-            os.makedirs(savepath)
 
         save_checkpoint({'epoch': epoch+1,
                         'state_dict': model.autoencoder.state_dict(),
@@ -261,18 +259,18 @@ def trainDEC(
                 p = model.clustering_layer.target_distribution(q)  # update the auxiliary target distribution p
                 assignment = q.argmax(1)
                 
-                balance = balance(s.cpu().numpy(), assignment, model.n_clusters)
+                bal = balance(s.cpu().numpy(), assignment.clone().detach().cpu().numpy(), model.clustering_layer.n_clusters)
 
                 if update_freq and i != 0 :
                     if y is not None:
-                        acc = np.round(acc(y.clone().detach().cpu().numpy(), assignment.clone().detach().cpu().numpy()), 5)
-                        nmi = np.round(nmi(y.clone().detach().cpu().numpy().squeeze(), assignment.clone().detach().cpu().numpy()), 5)
+                        acc_ = np.round(acc(y.clone().detach().cpu().numpy(), assignment.clone().detach().cpu().numpy()), 5)
+                        nmi_ = np.round(nmi(y.clone().detach().cpu().numpy().squeeze(), assignment.clone().detach().cpu().numpy()), 5)
                         loss = np.round(loss/count, 5)
-                        print(f'iter %d: ; acc: {acc: .4f}, loss={loss: .4f}, balance = {balance}')
+                        print(f'iter {i}: ; acc: {acc_: .4f}, loss={loss: .4f}, balance = {bal}')
                     else:
                         loss = np.round(loss/count, 5)
-                        nmi = np.round(nmi(assignment_last, assignment.clone().detach().cpu().numpy()), 5)
-                        print(f'iter %d: loss={loss: .4f}, balance = {balance}')
+                        nmi_ = np.round(nmi(assignment_last, assignment.clone().detach().cpu().numpy()), 5)
+                        print(f'iter {i}: loss={loss: .4f}, balance = {bal}')
 
                 assignment_last = assignment.detach().clone().cpu().numpy()
             
@@ -404,8 +402,10 @@ def train(
     #             p_norm=2).to(DEVICE)
     
     # 4. Initialize optimizer and criterion
-    optimizer = SGD(dec.model.parameters(), lr=lr, momentum=0.9) #, weight_decay=1e-4)
+    optimizer = SGD(dec.parameters(), lr=lr, momentum=0.9) #, weight_decay=1e-4)
+    # optimizer = Adam(dec.model.parameters(), lr=1e-2, weight_decay=1e-3)
     criterion = F.kl_div
+    criterion_fair = F.kl_div
 
     # optimizer = Adam(dec.parameters(), lr=args.lr, weight_decay=1e-4)
     
@@ -435,28 +435,98 @@ def train(
 
     # ipdb.set_trace()
     epochs = 0
-    for i in range(num_epochs_dec):
+    update_interval = data_train.X.shape[0]
+    update_freq = False
+    for e in range(num_epochs_dec):
         dec.train()
         loss = 0
         # batches = 1
         epochs+=1
         # ipdb.set_trace()
-        train_loss = trainDEC(model=dec,
-                            x=data_train.X,
-                            s=data_train.S,
-                            optimizer=optimizer,
-                            criterion=criterion,
-                            assignment_last=assignment_last,
-                            y=None,
-                            batch_size=batch_size,
-                            update_interval=30,
-                            update_freq=True
-                            )
+        
+        
+        x = data_train.X.to(DEVICE)
+        s = data_train.S.to(DEVICE)
+        y = data_train.Y.to(DEVICE)
+        index_array = np.arange(x.shape[0])
+        index = 0
+        loss = 0
+        count = 0
+
+        for i in range(int(np.ceil(x.shape[0]/batch_size))):
+            if i % update_interval == 0:
+                with torch.no_grad():
+                    x_proj = dec.autoencoder.encoder(x)
+                    q, _ = dec(x)
+                    p = dec.clustering_layer.target_distribution(q)  # update the auxiliary target distribution p
+                    assignment = q.argmax(1)
+                    
+                    bal = balance(s.cpu().numpy(), assignment.clone().detach().cpu().numpy(), dec.clustering_layer.n_clusters)
+
+                    if update_freq and i != 0:
+                        if y is not None:
+                            acc_ = np.round(acc(s.clone().detach().cpu().numpy(), assignment.clone().detach().cpu().numpy()), 5)
+                            nmi_ = np.round(nmi(s.clone().detach().cpu().numpy().squeeze(), assignment.clone().detach().cpu().numpy()), 5)
+                            loss = np.round(loss/count, 5)
+                            print(f'iter {i+1}: ; acc: {acc_: .4f}, loss={loss: .4f}, balance = {bal}')
+                        else:
+                            loss = np.round(loss/count, 5)
+                            nmi_ = np.round(nmi(assignment_last, assignment.clone().detach().cpu().numpy()), 5)
+                            print(f'iter {i+1}: loss={loss: .4f}, balance = {bal}')
+
+
+                    centroids = torch.zeros_like(dec.clustering_layer.cluster_centers)
+                    for i in range(centroids.shape[0]):
+                        # Select only the data points that belong to cluster i
+                        cluster_data = x_proj[assignment == i]
+                        # Compute the mean along each dimension
+                        centroids[i] = torch.mean(cluster_data, dim=0)
+                    
+                    cluster_centers = torch.tensor(centroids, dtype=torch.float, requires_grad=True).to(DEVICE)
+                    cluster_centers = cluster_centers.cuda(non_blocking=True) if 'cuda' in DEVICE.type else cluster_centers
+
+                    dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
+                    # assignment_last = assignment.detach().clone().cpu().numpy()
+                
+            optimizer.zero_grad()
+            with torch.set_grad_enabled(True):
+                # ipdb.set_trace()
+                idx = index_array[index * batch_size: min((index + 1) * batch_size, x.shape[0])]
+                
+                trainx = x[idx]
+                train_target = p[idx]
+
+                trainx = trainx.to(DEVICE)
+                train_target = train_target.to(DEVICE).detach()
+
+                outputs = dec(trainx)
+                cond_outputs = (train_target, dec.autoencoder.encoder(trainx))
+                index = index + 1 if (index + 1) * batch_size < x.shape[0] else 0
+
+                train_loss = criterion(outputs.log(), train_target)
+                train_loss_fair = criterion_fair(cond_outputs.log(), )
+
+                train_loss.backward()
+                optimizer.step()
+
+                loss += train_loss.item()
+                count +=1
             
 #           ipdb.set_trace()
 
-        loss += train_loss.item()
-            # batches += 1
+        with torch.no_grad():
+            q_eval = dec(x)
+            p_eval = dec.clustering_layer.target_distribution(q_eval)  # update the auxiliary target distribution p
+            assignment_eval = q.argmax(1)
+
+            loss = criterion(q_eval.log(), p_eval)
+            bal = balance(s.clone().detach().cpu().numpy(), assignment_eval.clone().detach().cpu().numpy(), dec.clustering_layer.n_clusters)
+            acc_ = np.round(acc(y.clone().detach().cpu().numpy(), assignment_eval.clone().detach().cpu().numpy()), 5)
+            nmi_ = np.round(nmi(y.clone().detach().cpu().numpy(), assignment_eval.clone().detach().cpu().numpy()), 5)
+
+            print(f'epoch {e+1}: acc: {acc_: .4f}, nmi: {nmi_: .4f} loss={loss: .4f}, balance = {bal}')
+
+        assignment_last = assignment.detach().clone().cpu().numpy()
 
         # Save plot every args.plot_iter
         # if iterations%args.plot_iter==0 and args.plot:
