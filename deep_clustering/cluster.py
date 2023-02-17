@@ -4,7 +4,12 @@ from torch import nn
 import ipdb
 
 class ClusterLayer(nn.Module):
-    def __init__(self, n_clusters:int, latent_size:int, cluster_centers:torch.Tensor, alpha:float, p_norm=2):
+    def __init__(self, 
+                 n_clusters:int, 
+                 latent_size:int, 
+                 cluster_centers:torch.Tensor, 
+                 alpha:float, 
+                 p_norm=2):
         super(ClusterLayer, self).__init__()
         self.n_clusters = n_clusters
         self.latent_size = latent_size

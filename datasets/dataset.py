@@ -29,4 +29,4 @@ class CustomDataset(Dataset):
 		Returns:
 			tuple: (X, S, Y), representing the features, sensitive attribute, and label
 		'''
-		return self.X[idx].to(DEVICE), self.S[idx].to(DEVICE), self.Y[idx].to(DEVICE)
+		return self.X[idx].to(DEVICE), self.S[idx].to(DEVICE), idx, self.Y[idx].to(DEVICE), 
