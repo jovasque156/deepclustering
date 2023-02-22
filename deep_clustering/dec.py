@@ -70,11 +70,11 @@ class clustering(nn.Module):
         super(clustering, self).__init__()
 
         self.n_clusters = n_clusters
-        self.input_shape = input_shape
+        self.rep_dim = input_shape
         self.alpha = alpha
 
         if cluster_centers is None:
-            initial_cluster_centers = torch.zeros(self.n_clusters, self.input_shape, dtype=torch.float32)
+            initial_cluster_centers = torch.zeros(self.n_clusters, self.rep_dim, dtype=torch.float32)
             nn.init.xavier_uniform_(initial_cluster_centers)
         else:
             initial_cluster_centers = cluster_centers
@@ -138,18 +138,19 @@ class DEC(nn.Module):
                 latent_size_sae:int, 
                 hidden_sizes_sae:list, 
                 alpha:float,
-                beta:float,
+                # beta:float,
                 dropout:float,
                 cluster_centers=None,
-                fairoid_centers=None, 
-                autoencoder=None,
-                p_norm=2):
+                # fairoid_centers=None, 
+                # p_norm=2,
+                autoencoder=None
+                ):
         super(DEC, self).__init__()
-        self.beta = beta
+        # self.beta = beta
 
         # self.clustering_layer = ClusterLayer(n_clusters, latent_size_sae, cluster_centers, alpha, p_norm)
-        self.clustering_layer = clustering(n_clusters, latent_size_sae)
-        self.fairoid_layer = FairoidLayer(n_clusters, latent_size_sae, fairoid_centers, alpha, p_norm)
+        self.clustering_layer = clustering(n_clusters, latent_size_sae, alpha, cluster_centers)
+        # self.fairoid_layer = FairoidLayer(n_clusters, latent_size_sae, fairoid_centers, alpha, p_norm)
         
         self.__null_autoencoder = autoencoder==None
         if self.__null_autoencoder:
@@ -198,8 +199,8 @@ class DEC(nn.Module):
 
         return phi
     def forward(self, x):
-        x_proj = self.autoencoder.encoder(x)
-        q = self.clustering_layer(x_proj)
-        # X = self.model(x)
+        # x_proj = self.autoencoder.encoder(x)
+        # q = self.clustering_layer(x_proj)
+        q = self.model(x)
         return q
 
