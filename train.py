@@ -157,12 +157,14 @@ def FairLoss(phi, target_phi):
     
 #     return loss_c
 
-def pretrainSAE(data_path:str, 
+def pretrainSAE(
                 model:torch.nn.Module, 
-                savepath:str,
+                data_path:str,
+                batch_size:int,
                 num_epochs:int,
+                savepath:str,
                 lr:float,
-                batch_size:int):
+                savemodel: bool=True):
     '''
     Pretrain the SAE
     Input:
@@ -178,7 +180,7 @@ def pretrainSAE(data_path:str,
     # Pretrain the autoencoder
     # sae = SAE(input_size= data.X.shape[1], dropout=args.dropout, latent_size=args.latent_size_sae, hidden_sizes=args.hidden_sizes_sae).to(DEVICE)
     
-    optimizer = SGD(model.autoencoder.parameters(), lr=.1, momentum=0.9)
+    optimizer = SGD(model.autoencoder.parameters(), lr=lr, momentum=0.9)
     # optimizer = Adam(model.autoencoder.parameters(), lr=1e-4, weight_decay=1e-3)
 
     criterion = MSELoss()
@@ -245,6 +247,7 @@ def trainDEC(
         y:torch.tensor=None,
         batch_size:int=256, 
         update_interval:int=30,
+        udpate_frq:int=20,
         update_freq:bool=False
         ):
         
@@ -302,17 +305,20 @@ def trainDEC(
 def train(
         sae_path:str,
         data_path:str,
-        n_clusters:int,
+        pretrain_sae:bool,
+        lr_sae:float,
         latent_size_sae:int,
         hidden_sizes_sae: List[int],
         alpha:float,
         beta:float,
         dropout:float,
-        pretrain_sae:bool,
-        lr:float,
+        n_clusters:int,
+        lr_dec:float,
         batch_size:int,
         num_epochs_sae:int,
         num_epochs_dec:int,
+        update_interval:int=5,
+        update_freq:bool=True
         ):
     
     # Load data
@@ -333,7 +339,7 @@ def train(
             hidden_sizes_sae = hidden_sizes_sae,
             latent_size_sae = latent_size_sae,
             alpha = alpha,
-            beta = beta,
+            # beta = beta,
             dropout = dropout
             )
     
@@ -348,7 +354,7 @@ def train(
                     model=dec, 
                     savepath=sae_path,
                     num_epochs=num_epochs_sae,
-                    lr=lr,
+                    lr=lr_sae,
                     batch_size=batch_size)
         
     assert os.path.isfile(sae_path), 'Pre-training not found. Pre-training SAE by using --pretrain'
@@ -361,20 +367,14 @@ def train(
     # Pass the data through the autoencoder
     print('Initializing cluster centers')
     
-    features = []
-    sensitives = []
-    for x, s, _, _ in data_train:
-        x, s = x.to(DEVICE), s.to(DEVICE)
-        features.append(dec.autoencoder.encoder(x).clone().detach().cpu())
-        sensitives.append(s.clone().detach().cpu())
-    
     #=====K-means clustering=====
-    kmeans = KMeans(n_clusters=n_clusters, n_init=20)
-    assignment_last = kmeans.fit_predict(torch.cat(features).reshape(data_train.X.shape[0],-1))
-    cluster_centers = torch.tensor(kmeans.cluster_centers_, dtype=torch.float, requires_grad=True).to(DEVICE)
-    cluster_centers = cluster_centers.cuda(non_blocking=True) if 'cuda' in DEVICE.type else cluster_centers
+    with torch.no_grad():
+        kmeans = KMeans(n_clusters=n_clusters, n_init=20)
+        assignment_last = kmeans.fit_predict(dec.autoencoder.encoder(data_train.X).clone().detach().cpu())
+        cluster_centers = torch.tensor(kmeans.cluster_centers_, dtype=torch.float, requires_grad=True).to(DEVICE)
+        # cluster_centers = cluster_centers.cuda(non_blocking=True) if 'cuda' in DEVICE.type else cluster_centers
 
-    dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
+        dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
 
     # #=====Fairoid centers=====
     # unique_t, _ = torch.unique(data_train.S, return_counts=True)
@@ -402,10 +402,10 @@ def train(
     #             p_norm=2).to(DEVICE)
     
     # 4. Initialize optimizer and criterion
-    optimizer = SGD(dec.parameters(), lr=lr, momentum=0.9) #, weight_decay=1e-4)
+    optimizer = SGD(dec.parameters(), lr=lr_dec, momentum=0.9) #, weight_decay=1e-4)
     # optimizer = Adam(dec.model.parameters(), lr=1e-2, weight_decay=1e-3)
     criterion = F.kl_div
-    criterion_fair = F.kl_div
+    # criterion_fair = F.kl_div
 
     # optimizer = Adam(dec.parameters(), lr=args.lr, weight_decay=1e-4)
     
@@ -434,59 +434,76 @@ def train(
     # while True:
 
     # ipdb.set_trace()
-    epochs = 0
-    update_interval = data_train.X.shape[0]
-    update_freq = False
+    index_array = np.arange(data_train.X.shape[0])
     for e in range(num_epochs_dec):
         dec.train()
-        loss = 0
+    
         # batches = 1
-        epochs+=1
         # ipdb.set_trace()
-        
-        
         x = data_train.X.to(DEVICE)
         s = data_train.S.to(DEVICE)
         y = data_train.Y.to(DEVICE)
         index_array = np.arange(x.shape[0])
         index = 0
-        loss = 0
-        count = 0
+        # loss = 0
+        # count = 0
+
+        if (e) % update_interval == 0:
+            with torch.no_grad():
+                q = dec(x)
+                p = dec.clustering_layer.target_distribution(q)  # update the auxiliary target distribution p
+                # assignment = q.argmax(1)
+                
+                # bal = balance(s.cpu().numpy(), assignment.clone().detach().cpu().numpy(), dec.clustering_layer.n_clusters)
+
+                # if update_freq and e != 0:
+                    # centroids = torch.zeros_like(dec.clustering_layer.cluster_centers)
+                    # for i in range(centroids.shape[0]):
+                    #     # Select only the data points that belong to cluster i
+                    #     cluster_data = dec.autoencoder.encoder(x)[assignment == i]
+                    #     # Compute the mean along each dimension
+                    #     centroids[i] = torch.mean(cluster_data, dim=0)
+                    
+                    # cluster_centers = torch.tensor(centroids, dtype=torch.float, requires_grad=True).to(DEVICE)
+                    # cluster_centers = cluster_centers.cuda(non_blocking=True) if 'cuda' in DEVICE.type else cluster_centers
+
+                    # dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
+                    # assignment_last = assignment.detach().clone().cpu().numpy()
 
         for i in range(int(np.ceil(x.shape[0]/batch_size))):
-            if i % update_interval == 0:
-                with torch.no_grad():
-                    x_proj = dec.autoencoder.encoder(x)
-                    q, _ = dec(x)
-                    p = dec.clustering_layer.target_distribution(q)  # update the auxiliary target distribution p
-                    assignment = q.argmax(1)
+            # if i % update_interval == 0:
+            #     with torch.no_grad():
+            #         x_proj = dec.autoencoder.encoder(x)
+            #         q, _ = dec(x)
+            #         p = dec.clustering_layer.target_distribution(q)  # update the auxiliary target distribution p
+            #         assignment = q.argmax(1)
                     
-                    bal = balance(s.cpu().numpy(), assignment.clone().detach().cpu().numpy(), dec.clustering_layer.n_clusters)
+            #         bal = balance(s.cpu().numpy(), assignment.clone().detach().cpu().numpy(), dec.clustering_layer.n_clusters)
 
-                    if update_freq and i != 0:
-                        if y is not None:
-                            acc_ = np.round(acc(s.clone().detach().cpu().numpy(), assignment.clone().detach().cpu().numpy()), 5)
-                            nmi_ = np.round(nmi(s.clone().detach().cpu().numpy().squeeze(), assignment.clone().detach().cpu().numpy()), 5)
-                            loss = np.round(loss/count, 5)
-                            print(f'iter {i+1}: ; acc: {acc_: .4f}, loss={loss: .4f}, balance = {bal}')
-                        else:
-                            loss = np.round(loss/count, 5)
-                            nmi_ = np.round(nmi(assignment_last, assignment.clone().detach().cpu().numpy()), 5)
-                            print(f'iter {i+1}: loss={loss: .4f}, balance = {bal}')
+            #         if update_freq and i != 0:
+            #             if y is not None:
+            #                 acc_ = np.round(acc(s.clone().detach().cpu().numpy(), assignment.clone().detach().cpu().numpy()), 5)
+            #                 nmi_ = np.round(nmi(s.clone().detach().cpu().numpy().squeeze(), assignment.clone().detach().cpu().numpy()), 5)
+            #                 loss = np.round(loss/count, 5)
+            #                 print(f'iter {i+1}: ; acc: {acc_: .4f}, loss={loss: .4f}, balance = {bal}')
+            #             else:
+            #                 loss = np.round(loss/count, 5)
+            #                 nmi_ = np.round(nmi(assignment_last, assignment.clone().detach().cpu().numpy()), 5)
+            #                 print(f'iter {i+1}: loss={loss: .4f}, balance = {bal}')
 
 
-                    centroids = torch.zeros_like(dec.clustering_layer.cluster_centers)
-                    for i in range(centroids.shape[0]):
-                        # Select only the data points that belong to cluster i
-                        cluster_data = x_proj[assignment == i]
-                        # Compute the mean along each dimension
-                        centroids[i] = torch.mean(cluster_data, dim=0)
+            #         centroids = torch.zeros_like(dec.clustering_layer.cluster_centers)
+            #         for i in range(centroids.shape[0]):
+            #             # Select only the data points that belong to cluster i
+            #             cluster_data = x_proj[assignment == i]
+            #             # Compute the mean along each dimension
+            #             centroids[i] = torch.mean(cluster_data, dim=0)
                     
-                    cluster_centers = torch.tensor(centroids, dtype=torch.float, requires_grad=True).to(DEVICE)
-                    cluster_centers = cluster_centers.cuda(non_blocking=True) if 'cuda' in DEVICE.type else cluster_centers
+            #         cluster_centers = torch.tensor(centroids, dtype=torch.float, requires_grad=True).to(DEVICE)
+            #         cluster_centers = cluster_centers.cuda(non_blocking=True) if 'cuda' in DEVICE.type else cluster_centers
 
-                    dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
-                    # assignment_last = assignment.detach().clone().cpu().numpy()
+            #         dec.state_dict()['clustering_layer.cluster_centers'].copy_(cluster_centers)
+            #         # assignment_last = assignment.detach().clone().cpu().numpy()
                 
             optimizer.zero_grad()
             with torch.set_grad_enabled(True):
@@ -494,30 +511,30 @@ def train(
                 idx = index_array[index * batch_size: min((index + 1) * batch_size, x.shape[0])]
                 
                 trainx = x[idx]
-                train_target = p[idx]
-
                 trainx = trainx.to(DEVICE)
-                train_target = train_target.to(DEVICE).detach()
+
+                train_target = p[idx]
+                train_target = train_target.to(DEVICE)
 
                 outputs = dec(trainx)
-                cond_outputs = (train_target, dec.autoencoder.encoder(trainx))
+                # cond_outputs = (train_target, dec.autoencoder.encoder(trainx))
                 index = index + 1 if (index + 1) * batch_size < x.shape[0] else 0
 
                 train_loss = criterion(outputs.log(), train_target)
-                train_loss_fair = criterion_fair(cond_outputs.log(), )
+                # train_loss_fair = criterion_fair(cond_outputs.log(), )
 
                 train_loss.backward()
                 optimizer.step()
 
-                loss += train_loss.item()
-                count +=1
+                # loss += train_loss.item()
+                # count +=1
             
 #           ipdb.set_trace()
 
         with torch.no_grad():
             q_eval = dec(x)
-            p_eval = dec.clustering_layer.target_distribution(q_eval)  # update the auxiliary target distribution p
-            assignment_eval = q.argmax(1)
+            p_eval = dec.clustering_layer.target_distribution(q_eval)
+            assignment_eval = q_eval.argmax(1)
 
             loss = criterion(q_eval.log(), p_eval)
             bal = balance(s.clone().detach().cpu().numpy(), assignment_eval.clone().detach().cpu().numpy(), dec.clustering_layer.n_clusters)
@@ -526,7 +543,7 @@ def train(
 
             print(f'epoch {e+1}: acc: {acc_: .4f}, nmi: {nmi_: .4f} loss={loss: .4f}, balance = {bal}')
 
-        assignment_last = assignment.detach().clone().cpu().numpy()
+        assignment_last = assignment_eval.detach().clone().cpu().numpy()
 
         # Save plot every args.plot_iter
         # if iterations%args.plot_iter==0 and args.plot:
@@ -613,15 +630,18 @@ if __name__=='__main__':
     parser.add_argument('--n_clusters', type=int, default=10)
     parser.add_argument('--alpha', type=float, default=1.0, help='Parameter of q distribution, which is the assignment function')
     parser.add_argument('--beta', type=float, default=1000.0, help = 'Parameter for phi distribution, which is the conditional distribution of sensitive attribute given the centroid')
-    parser.add_argument('--dropout', type=float, default=0.2)
+    parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--num_epochs_sae', type=int, default=150, help='Number of epochs to train the SAE')
     parser.add_argument('--num_epochs_dec', type=int, default=150, help='Number of epochs to train the DEC')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size for training the SAE and DEC')
-    parser.add_argument('--lr', type=float, default=0.01, help='learning rate for training DEC')
+    parser.add_argument('--lr_dec', type=float, default=0.01, help='learning rate for training DEC')
+    parser.add_argument('--lr_sae', type=float, default=0.01, help='learning rate for training DEC')
     parser.add_argument('--pretrain_sae', action = 'store_true', help = 'Use this flag to pretrain the autoencoder')
     parser.add_argument('--hidden_sizes_sae', type=list, nargs='+', default=[500, 500, 2000], help='List of hidden layer sizes for the autoencoder')
     parser.add_argument('--latent_size_sae', type=int, default=5, help='Latent size for the autoencoder')
-    
+    parser.add_argument('--update_interval', type=int, default=5, help='Interval of epochs to update centroids (if set update_freq) and target distribution')
+    parser.add_argument('--update_freq', action='store_true', default=False, help='Update results and centroids')
+
     # parser.add_argument('--sampled', type=int, default=4000, help='number of sampling for plots')
     # parser.add_argument('--gamma', type=float, default=1.0, help='Weight for fairness loss')
     # parser.add_argument('--rho', type=float, default=10.0, help='Weight for Contrastive loss')
@@ -669,17 +689,21 @@ if __name__=='__main__':
 
     # Train DEC
     print('DEC')
-    train(sae_path = sae_path,
+    train(
+        sae_path = sae_path,
         data_path = data_path,
-        n_clusters=args.n_clusters,
+        pretrain_sae=args.pretrain_sae,
         latent_size_sae=args.latent_size_sae,
         hidden_sizes_sae=args.hidden_sizes_sae,
+        lr_sae = args.lr_sae,
         alpha=args.alpha,
         beta=args.beta,
         dropout=args.dropout,
-        pretrain_sae=args.pretrain_sae,
-        lr=args.lr,
+        n_clusters=args.n_clusters,
+        lr_dec=args.lr_dec,
         batch_size=args.batch_size,
         num_epochs_sae=args.num_epochs_sae,
-        num_epochs_dec=args.num_epochs_dec
+        num_epochs_dec=args.num_epochs_dec,
+        update_interval=args.update_interval,
+        update_freq = args.update_freq
         )
