@@ -11,9 +11,9 @@ class CustomDataset(Dataset):
 			S: numpy, representing the sensitive attribute. Assuming binary
 			Y: numpy, representing the label.
 		'''
-		self.X = torch.FloatTensor(X.toarray())
-		self.S = torch.tensor(S)
-		self.Y = torch.tensor(Y)
+		self.X = torch.FloatTensor(X.toarray()).to(DEVICE)
+		self.S = torch.tensor(S).to(DEVICE)
+		self.Y = torch.tensor(Y).to(DEVICE)
 
 	def __len__(self):
 		'''
@@ -29,4 +29,4 @@ class CustomDataset(Dataset):
 		Returns:
 			tuple: (X, S, Y), representing the features, sensitive attribute, and label
 		'''
-		return self.X[idx].to(DEVICE), self.S[idx].to(DEVICE), idx, self.Y[idx].to(DEVICE), 
+		return self.X[idx], self.S[idx], idx, self.Y[idx]
