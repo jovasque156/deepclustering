@@ -9,6 +9,7 @@ from typing import Optional, List
 
 import ipdb
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class SAE(nn.Module):
     def __init__(self, input_size:int, 
                 dropout:float, 
@@ -21,24 +22,26 @@ class SAE(nn.Module):
         self.hidden_sizes = hidden_sizes
         
         # put every size layer in a list
-        self.list_sizes = hidden_sizes + [latent_size]
+        # self.list_sizes = hidden_sizes + [latent_size]
 
         # Appending layers int a nn.Sequential list by using for loop
         modules= []
-        modules.append(nn.Linear(input_size, self.list_sizes[0]))
-        for hs in range(len(self.list_sizes)-1):
+        modules.append(nn.Linear(input_size, self.hidden_sizes[0], bias=False))
+        for hs in range(len(self.hidden_sizes)-1):
+            modules.append(nn.Linear(self.hidden_sizes[hs], self.hidden_sizes[hs+1]))
             modules.append(nn.Dropout(self.dropout))
             modules.append(nn.ReLU())
-            modules.append(nn.Linear(self.list_sizes[hs], self.list_sizes[hs+1]))
+        modules.append(nn.Linear(self.hidden_sizes[-1], self.latent_size))            
         self.encoder = nn.Sequential(*modules)
 
         # Reverse the list and made the corresponding modifications
         modules= []
-        for hs in range(len(self.list_sizes)-1,0, -1):
-            modules.append(nn.Linear(self.list_sizes[hs], self.list_sizes[hs-1]))
+        self.hidden_sizes = hidden_sizes + [latent_size]
+        for hs in range(len(self.hidden_sizes)-1,0, -1):
+            modules.append(nn.Linear(self.hidden_sizes[hs], self.hidden_sizes[hs-1]))
             modules.append(nn.Dropout())
             modules.append(nn.ReLU())
-        modules.append(nn.Linear(self.list_sizes[0], input_size))
+        modules.append(nn.Linear(self.hidden_sizes[0], input_size, bias=False))
         self.decoder = nn.Sequential(*modules)    
 
         self.init_weights()
@@ -47,7 +50,8 @@ class SAE(nn.Module):
         def func(m):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0.00)
+                if hasattr(m, 'bias') and m.bias is not None:
+                    nn.init.constant_(m.bias, 0.00)
 
         self.encoder.apply(func)
         self.decoder.apply(func)
@@ -74,7 +78,7 @@ class clustering(nn.Module):
         self.alpha = alpha
 
         if cluster_centers is None:
-            initial_cluster_centers = torch.zeros(self.n_clusters, self.rep_dim, dtype=torch.float32)
+            initial_cluster_centers = torch.zeros(self.n_clusters, self.rep_dim, dtype=torch.float32).to(DEVICE)
             nn.init.xavier_uniform_(initial_cluster_centers)
         else:
             initial_cluster_centers = cluster_centers
@@ -97,15 +101,14 @@ class fair_clustering(nn.Module):
                 n_clusters:int,
                 latent_size:int, 
                 alpha:float,
-                fairoid_centers: Optional[torch.Tensor]=None, 
-                p_norm=2):
+                beta:float,
+                fairoid_centers: Optional[torch.Tensor]=None):
         super(fair_clustering, self).__init__()
         self.n_clusters = n_clusters
         self.latent_size = latent_size
-        self.p_norm = p_norm
         
-        if fairoid_centers==None:
-            initial_fairoid_centers = torch.zeros(self.n_clusters, self.latent_size, dtype=torch.float64).cuda()
+        if fairoid_centers is None:
+            initial_fairoid_centers = torch.zeros(self.n_clusters, self.latent_size, dtype=torch.float32).to(DEVICE)
             nn.init.xavier_uniform_(initial_fairoid_centers)
         else:
             initial_fairoid_centers = fairoid_centers
@@ -113,6 +116,7 @@ class fair_clustering(nn.Module):
         self.fairoid_centers = nn.Parameter(initial_fairoid_centers)
 
         self.alpha = alpha
+        self.beta = beta
 
     def forward(self, cluster_centers):
         # ipdb.set_trace()
@@ -124,10 +128,11 @@ class fair_clustering(nn.Module):
         return phi_jt.t().float()
     
     @staticmethod
-    def target_distribution_phi(self, phi):
+    def target_distribution_phi(phi):
         # ipdb.set_trace()
         noise = 1e-5
-        phi_hat = (phi+noise)**(1/self.beta)
+        beta = 1000
+        phi_hat = (phi+noise)**(1/beta)
         weight = phi_hat / torch.sum( phi, 0).t()
         return (weight.t()/torch.sum(weight, 1)).t().float()    
 
@@ -138,11 +143,10 @@ class DEC(nn.Module):
                 latent_size_sae:int, 
                 hidden_sizes_sae:list, 
                 alpha:float,
-                # beta:float,
+                beta:float,
                 dropout:float,
                 cluster_centers=None,
-                # fairoid_centers=None, 
-                # p_norm=2,
+                fairoid_centers=None,
                 autoencoder=None
                 ):
         super(DEC, self).__init__()
@@ -150,7 +154,7 @@ class DEC(nn.Module):
 
         # self.clustering_layer = ClusterLayer(n_clusters, latent_size_sae, cluster_centers, alpha, p_norm)
         self.clustering_layer = clustering(n_clusters, latent_size_sae, alpha, cluster_centers)
-        # self.fairoid_layer = FairoidLayer(n_clusters, latent_size_sae, fairoid_centers, alpha, p_norm)
+        self.fairoid_layer = fair_clustering(n_clusters, latent_size_sae, alpha, beta, fairoid_centers)
         
         self.__null_autoencoder = autoencoder==None
         if self.__null_autoencoder:
@@ -198,6 +202,7 @@ class DEC(nn.Module):
         phi = self.fairoid_layer(centroids)
 
         return phi
+    
     def forward(self, x):
         # x_proj = self.autoencoder.encoder(x)
         # q = self.clustering_layer(x_proj)
